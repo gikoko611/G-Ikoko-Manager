@@ -387,13 +387,13 @@ private fun searchSourceTree(context: android.content.Context, treeUri: Uri, que
     }
     walk(root, "")
     return buildString {
-        append("CODE SEARCH RESULTS\\nQuery: ").append(query).append("\\nFiles scanned: ").append(visited)
-        append("\\nMatches: ").append(matches.size)
-        if (skipped > 0) append("\\nUnreadable folders/files: ").append(skipped)
-        append("\\n\\n")
+        append("CODE SEARCH RESULTS\nQuery: ").append(query).append("\nFiles scanned: ").append(visited)
+        append("\nMatches: ").append(matches.size)
+        if (skipped > 0) append("\nUnreadable folders/files: ").append(skipped)
+        append("\n\n")
         if (matches.isEmpty()) append("No matches found. Check the keyword and selected folder.")
-        else append(matches.joinToString("\\n\\n"))
-        if (visited >= 1000) append("\\n\\nStopped at the 1,000-file safety limit.")
-        if (matches.size >= 200) append("\\n\\nStopped at the 200-match safety limit.")
+        else append(matches.joinToString("\n\n"))
+        if (visited >= 1000) append("\n\nStopped at the 1,000-file safety limit.")
+        if (matches.size >= 200) append("\n\nStopped at the 200-match safety limit.")
     }
 }
