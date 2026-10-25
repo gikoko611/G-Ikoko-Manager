@@ -35,6 +35,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.security.MessageDigest
+import java.util.zip.ZipInputStream
+import java.io.File
+import android.content.pm.PackageManager
 import android.util.Base64
 
 private val Navy = Color(0xFF04142D)
@@ -148,7 +151,41 @@ private fun FeatureScreen(tool: ToolItem, onBack: () -> Unit) {
                     context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
                 }.getOrElse { "Could not read this file as text: ${it.message}" }
             }
-            result = "Selected file:\n$uri"
+            result = when (tool.title) {
+                "APK Analyzer" -> runCatching {
+                    val temp = File.createTempFile("ikoko-apk-", ".apk", context.cacheDir)
+                    context.contentResolver.openInputStream(uri)?.use { input -> temp.outputStream().use { input.copyTo(it) } }
+                    val info = context.packageManager.getPackageArchiveInfo(temp.absolutePath, PackageManager.GET_PERMISSIONS)
+                        ?: error("Android could not parse this APK")
+                    info.applicationInfo?.sourceDir = temp.absolutePath
+                    info.applicationInfo?.publicSourceDir = temp.absolutePath
+                    val label = info.applicationInfo?.loadLabel(context.packageManager)?.toString() ?: "(unknown)"
+                    val permissions = info.requestedPermissions?.joinToString("\\n") ?: "(none declared)"
+                    val digest = MessageDigest.getInstance("SHA-256").digest(temp.readBytes()).joinToString("") { "%02x".format(it) }
+                    temp.delete()
+                    "APK ANALYSIS\\nApp: $label\\nPackage: ${info.packageName}\\nVersion: ${info.versionName ?: "(unknown)"}\\nVersion code: ${info.longVersionCode}\\nRequested permissions:\\n$permissions\\n\\nSHA-256: $digest"
+                }.getOrElse { "APK analysis failed: ${it.message}" }
+                "Hex Editor" -> runCatching {
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readNBytes(512) } ?: byteArrayOf()
+                    val hex = bytes.indices.joinToString(" ") { "%02X".format(bytes[it]) }
+                    val ascii = bytes.joinToString("") { b -> val n = b.toInt() and 0xff; if (n in 32..126) n.toChar().toString() else "." }
+                    "HEX PREVIEW (first 512 bytes max)\\nPreview bytes: ${bytes.size}\\n\\n$hex\\n\\nASCII:\\n$ascii"
+                }.getOrElse { "Hex preview failed: ${it.message}" }
+                "ZIP Studio", "APKS Converter", "XAPK / APKM" -> runCatching {
+                    val entries = mutableListOf<String>()
+                    context.contentResolver.openInputStream(uri)?.use { stream ->
+                        ZipInputStream(stream).use { zip ->
+                            var entry = zip.nextEntry
+                            while (entry != null && entries.size < 500) {
+                                entries.add((if (entry.isDirectory) "[DIR] " else "") + entry.name + if (entry.size >= 0) "  (${entry.size} bytes)" else "")
+                                entry = zip.nextEntry
+                            }
+                        }
+                    } ?: error("Cannot open selected archive")
+                    "ARCHIVE CONTENTS (maximum 500 entries)\\nEntries listed: ${entries.size}\\n\\n" + entries.joinToString("\\n")
+                }.getOrElse { "Archive listing failed: ${it.message}" }
+                else -> "Selected file:\\n$uri"
+            }
             Toast.makeText(context, "File selected", Toast.LENGTH_SHORT).show()
         }
     }
@@ -165,12 +202,12 @@ private fun FeatureScreen(tool: ToolItem, onBack: () -> Unit) {
 
     val description = when (tool.title) {
         "File Manager" -> "Use Android's system file picker to browse files you have access to. Root access is not required."
-        "APK Analyzer" -> "Choose an APK file. This initial screen selects the package; detailed manifest/permission analysis is not implemented yet."
-        "APKS Converter" -> "Choose an .apks or related archive. Full split-package conversion still needs its conversion engine."
+        "APK Analyzer" -> "Inspect APK package name, app label, version, requested permissions and SHA-256 locally. This is metadata inspection, not a full manifest editor."
+        "APKS Converter" -> "Inspect the contents of an .apks archive. Converting split APKs into an installable package is not included yet."
         "XAPK / APKM" -> "Choose an XAPK/APKM bundle. Extraction and installation support are not implemented in this initial screen."
         "Text Editor" -> "Open a text file, edit its contents, then save a copy. Very large files may not fit in memory."
-        "Hex Editor" -> "Choose a file. Binary hex viewing/editing is not implemented yet."
-        "ZIP Studio" -> "Choose an archive. ZIP extraction/creation operations are not implemented yet."
+        "Hex Editor" -> "View a hexadecimal and ASCII preview of the first 512 bytes of a selected file. Binary editing is not included yet."
+        "ZIP Studio" -> "List ZIP archive entries and reported sizes. Extraction and archive creation are not included yet."
         "APK Signer" -> "Choose an APK. Cryptographic APK signing and signature verification are not implemented yet."
         "DEX / Smali" -> "Choose a DEX or Smali file. Disassembly and assembly engines are not included yet."
         "Resource Studio" -> "Choose an Android resource file. AXML/ARSC decoding is not implemented yet."
