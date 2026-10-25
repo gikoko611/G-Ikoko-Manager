@@ -8,6 +8,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.documentfile.provider.DocumentFile
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -59,6 +63,7 @@ private data class ToolItem(val title: String, val subtitle: String, val symbol:
 private fun ManagerApp() {
     val tools = listOf(
         ToolItem("File Manager", "Browse and select files", "▤"),
+        ToolItem("Code Finder", "Search code across a project folder", "⌕"),
         ToolItem("APK Analyzer", "Select an APK for inspection", "◈"),
         ToolItem("APKS Converter", "Select split APK packages", "⇄"),
         ToolItem("XAPK / APKM", "Select an app bundle", "▣"),
@@ -141,7 +146,7 @@ private fun FeatureScreen(tool: ToolItem, onBack: () -> Unit) {
     var editorText by remember(tool.title) { mutableStateOf("") }
     var utilityInput by remember(tool.title) { mutableStateOf("") }
     var result by remember(tool.title) { mutableStateOf("") }
-    var pickedUri by remember(tool.title) { mutableStateOf<Uri?>(null) }
+    var pickedUri by remember(tool.title) { mutableStateOf<Uri?>(null) }\n    var codeQuery by remember(tool.title) { mutableStateOf("") }\n    var codeFolder by remember(tool.title) { mutableStateOf<Uri?>(null) }\n    var isSearching by remember(tool.title) { mutableStateOf(false) }\n    val scope = rememberCoroutineScope()
 
     val openFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -190,6 +195,14 @@ private fun FeatureScreen(tool: ToolItem, onBack: () -> Unit) {
             Toast.makeText(context, "File selected", Toast.LENGTH_SHORT).show()
         }
     }
+    val chooseCodeFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            codeFolder = uri
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            result = "Project folder selected. Enter a keyword or symbol, then tap Search Code."
+        }
+    }
+
     val saveText = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         if (uri != null) {
             val saved = runCatching {
@@ -236,6 +249,38 @@ private fun FeatureScreen(tool: ToolItem, onBack: () -> Unit) {
                 Spacer(Modifier.height(18.dp))
 
                 when (tool.title) {
+                    "Code Finder" -> {
+                        Text("Search source code inside a folder you select. Works offline and does not need root access.", color = Silver, fontSize = 13.sp)
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedButton(onClick = { chooseCodeFolder.launch(null) }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (codeFolder == null) "Choose Project Folder" else "Change Project Folder")
+                        }
+                        Text(if (codeFolder == null) "No folder selected" else "Folder selected ✓", color = if (codeFolder == null) Color(0xFFFFC857) else Cyan, fontSize = 12.sp)
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = codeQuery, onValueChange = { codeQuery = it },
+                            label = { Text("Keyword, function, class or error text") },
+                            placeholder = { Text("e.g. onClick, MainActivity, TODO") },
+                            modifier = Modifier.fillMaxWidth(), singleLine = true
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            enabled = codeFolder != null && codeQuery.isNotBlank() && !isSearching,
+                            onClick = {
+                                val folder = codeFolder
+                                val query = codeQuery.trim()
+                                if (folder != null) scope.launch {
+                                    isSearching = true
+                                    result = withContext(Dispatchers.IO) {
+                                        searchSourceTree(context, folder, query)
+                                    }
+                                    isSearching = false
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(if (isSearching) "Searching…" else "Search Code") }
+                        Text("Searches .kt, .java, .xml, .json, .js, .ts, .py, .smali, .gradle, .html, .css, .c, .cpp, .h, .md and other text files. Limits: 1,000 files and 200 matches per search.", color = Color(0xFF9FB9D9), fontSize = 11.sp, lineHeight = 15.sp)
+                    }
                     "Text Editor" -> {
                         OutlinedButton(onClick = { openFile.launch(arrayOf("text/*", "application/json", "application/xml")) }, modifier = Modifier.fillMaxWidth()) { Text("Open text file") }
                         Spacer(Modifier.height(8.dp))
@@ -299,5 +344,56 @@ private fun FeatureScreen(tool: ToolItem, onBack: () -> Unit) {
             }
         }
         Text("Powered by I KO KO", color = Color(0xFF85A8D4), fontSize = 10.sp, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 10.dp))
+    }
+}
+
+private fun searchSourceTree(context: android.content.Context, treeUri: Uri, query: String): String {
+    val root = DocumentFile.fromTreeUri(context, treeUri) ?: return "Could not access this folder."
+    val allowed = setOf(
+        "kt", "kts", "java", "xml", "json", "js", "jsx", "ts", "tsx", "py", "smali",
+        "gradle", "properties", "pro", "txt", "md", "html", "htm", "css", "scss", "c",
+        "cc", "cpp", "h", "hpp", "rs", "go", "php", "sh", "yml", "yaml", "toml", "sql",
+        "dart", "swift", "rb", "bat", "ps1", "makefile"
+    )
+    val matches = mutableListOf<String>()
+    var visited = 0
+    var skipped = 0
+    val needle = query.lowercase()
+    fun walk(dir: DocumentFile, relative: String) {
+        if (visited >= 1000 || matches.size >= 200) return
+        val children = runCatching { dir.listFiles() }.getOrElse { skipped++; return }
+        for (file in children) {
+            if (visited >= 1000 || matches.size >= 200) break
+            val path = if (relative.isEmpty()) file.name ?: "(unnamed)" else "$relative/${file.name ?: "(unnamed)"}"
+            if (file.isDirectory) {
+                walk(file, path)
+            } else if (file.isFile) {
+                visited++
+                val name = file.name ?: continue
+                val ext = name.substringAfterLast('.', "").lowercase()
+                if (ext !in allowed || (file.length() > 1024 * 1024 && file.length() > 0)) continue
+                runCatching {
+                    context.contentResolver.openInputStream(file.uri)?.bufferedReader(Charsets.UTF_8)?.useLines { lines ->
+                        lines.forEachIndexed { index, line ->
+                            if (line.contains(needle, ignoreCase = true) && matches.size < 200) {
+                                val snippet = line.trim().take(220)
+                                matches.add("$path:${index + 1}: $snippet")
+                            }
+                        }
+                    }
+                }.onFailure { skipped++ }
+            }
+        }
+    }
+    walk(root, "")
+    return buildString {
+        append("CODE SEARCH RESULTS\\nQuery: ").append(query).append("\\nFiles scanned: ").append(visited)
+        append("\\nMatches: ").append(matches.size)
+        if (skipped > 0) append("\\nUnreadable folders/files: ").append(skipped)
+        append("\\n\\n")
+        if (matches.isEmpty()) append("No matches found. Check the keyword and selected folder.")
+        else append(matches.joinToString("\\n\\n"))
+        if (visited >= 1000) append("\\n\\nStopped at the 1,000-file safety limit.")
+        if (matches.size >= 200) append("\\n\\nStopped at the 200-match safety limit.")
     }
 }
