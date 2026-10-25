@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import java.security.MessageDigest
 import java.util.zip.ZipInputStream
 import java.io.File
+import java.io.ByteArrayOutputStream
 import android.content.pm.PackageManager
 import android.util.Base64
 
@@ -166,7 +167,7 @@ private fun FeatureScreen(tool: ToolItem, onBack: () -> Unit) {
                     "APK ANALYSIS\\nApp: $label\\nPackage: ${info.packageName}\\nVersion: ${info.versionName ?: "(unknown)"}\\nVersion code: ${info.longVersionCode}\\nRequested permissions:\\n$permissions\\n\\nSHA-256: $digest"
                 }.getOrElse { "APK analysis failed: ${it.message}" }
                 "Hex Editor" -> runCatching {
-                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readNBytes(512) } ?: byteArrayOf()
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { input ->\n                        val output = ByteArrayOutputStream()\n                        val buffer = ByteArray(512)\n                        val count = input.read(buffer)\n                        if (count > 0) output.write(buffer, 0, count)\n                        output.toByteArray()\n                    } ?: byteArrayOf()
                     val hex = bytes.indices.joinToString(" ") { "%02X".format(bytes[it]) }
                     val ascii = bytes.joinToString("") { b -> val n = b.toInt() and 0xff; if (n in 32..126) n.toChar().toString() else "." }
                     "HEX PREVIEW (first 512 bytes max)\\nPreview bytes: ${bytes.size}\\n\\n$hex\\n\\nASCII:\\n$ascii"
